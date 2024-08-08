@@ -8,10 +8,9 @@
 
 using namespace std;
 
-
 /**
  * mpic++ a1.cpp -o a1test
- * mpirun -np 4 a1test 
+ * mpirun -np 4 a1test
  */
 
 // always use argc and argv, as mpirun will pass the appropriate parms.
@@ -25,7 +24,7 @@ const ULONG m = 4294967296;
 const ULONG sidelen = 65536;
 // sqrt of m
 // const ULONG numtrials = 1000000;
-const ULONG numtrials = 4;
+ULONG numtrials = 0;
 
 // Evaluate ( ax+c ) mod m
 ULONG modlin(ULONG a, ULONG x, ULONG c, ULONG m)
@@ -40,36 +39,35 @@ double rescale(ULONG N, ULONG n, double x1, double x2)
   return x1 + f * (x2 - x1);
 }
 
-
 ULONG int_pow(ULONG x, int pow)
 {
-    ULONG y = 1;
-    for (size_t i = 0; i < pow; ++i)
-    {
-        y = (y * x);
-    }
-    return y;
+  ULONG y = 1;
+  for (size_t i = 0; i < pow; ++i)
+  {
+    y = (y * x);
+  }
+  return y;
 }
 
 ULONG leapfrog_C(ULONG c, ULONG a, int pow, ULONG mode_v)
 {
-    ULONG total_a = 0;
-    for (size_t i = 0; i < pow; i++)
-    {
-        total_a += int_pow(a, i);
-    }
-    return (c * total_a) % mode_v;
+  ULONG total_a = 0;
+  for (size_t i = 0; i < pow; i++)
+  {
+    total_a += int_pow(a, i);
+  }
+  return (c * total_a) % mode_v;
 }
-
 
 ULONG leapfrog_A(ULONG x, int pow, ULONG mod_v)
 {
-    ULONG y = int_pow(x, pow);    
-    return y % mod_v;
+  ULONG y = int_pow(x, pow);
+  return y % mod_v;
 }
 
 ULONG calculate(ULONG i_prev, int interval, int pid)
 {
+  // cout << "MyID[" << pid << "]" << ",start Random Number is: " << i_prev << std::endl;
   ULONG total_count = 0;
 
   ULONG lfa = leapfrog_A(a, interval, m);
@@ -77,7 +75,6 @@ ULONG calculate(ULONG i_prev, int interval, int pid)
 
   for (ULONG n = 0; n < numtrials; ++n)
   {
-    cout << "MyID[" << pid << "]" << ",start Random Number is: " << i_prev << std::endl;
 
     ULONG i_next = modlin(lfa, i_prev, lfc, m);
     i_prev = i_next;
@@ -88,9 +85,11 @@ ULONG calculate(ULONG i_prev, int interval, int pid)
     double x = rescale(sidelen, ix, -1, 1);
     double y = rescale(sidelen, iy, -1, 1);
     // Now we have an (x , y) pair generated from a single random integer
-    double r = sqrt(x * x + y * y);
-    total_count = (r >= 1) ? (++total_count) : total_count;
-    std::cout << "MyID[" << pid << "]" << ",Random Number is: " << i_next << " ,ix: " << ix << " , iy: " << iy << " ,x: " << x << " ,y:" << y << " , R: " << r << std::endl;
+
+    if (x * x + y * y <= 1.0) {
+        total_count++;
+    }
+    // std::cout << "MyID[" << pid << "]" << ",Random Number is: " << i_next << " ,ix: " << ix << " , iy: " << iy << " ,x: " << x << " ,y:" << y << " , R: " << r << std::endl;
   }
   return total_count;
 }
@@ -113,6 +112,8 @@ int main(int argc, char *argv[])
   int myid = MPI::COMM_WORLD.Get_rank();
   int numproc = MPI::COMM_WORLD.Get_size();
 
+  numtrials = atoi(argv[1]);//Get the calculate times
+
   std::cout << "This is id " << myid << " out of " << numproc << std::endl;
 
   if (myid == 0)
@@ -122,63 +123,69 @@ int main(int argc, char *argv[])
     ULONG irecv = 0;
     ULONG total_count = 0;
 
-    //calculate the seeks
+    // calculate the seeks
     ULONG arr[numproc];
     calculate_seeks(seek, arr, numproc);
-    cout<<"Seek array is:["<<arr[0]<<","<<arr[1]<<","<<arr[2]<<","<<arr[3]<<"]"<<endl;
+    cout << "Seek array is:[" << arr[0] << "," << arr[1] << "," << arr[2] << "," << arr[3] << "]" << endl;
 
+    double time_cost = 0;
     // Send message to each slave process and wait for response
     for (int n = 1; n < numproc; ++n)
     {
       double time0 = MPI::Wtime();
-      
+
       // Master sends seed to slave    Will it block the for loop?????
       MPI::COMM_WORLD.Send(&arr[n], 1, MPI::UNSIGNED_LONG, n, 0);
 
       // receive sends result from slave
       MPI::COMM_WORLD.Recv(&irecv, 1, MPI::UNSIGNED_LONG, n, 0);
 
-
       // Elapsed time in milliseconds
       double telapse = 1000 * (MPI::Wtime() - time0);
+      time_cost += telapse;
       // std::cout << "myid[" << n << "] processes time:" << telapse << " . number:"<< irecv<<std::endl;
     }
 
+    cout << "Myid [" << myid << "]Send Seek time cost: " << time_cost << endl;
 
-
-    //calculate the number of value smaller than 1
+    // calculate the number of value smaller than 1
     total_count = calculate(arr[myid], numproc, myid);
 
+    cout << "Myid[" << myid << "] calculate result: " << total_count << endl;
 
-    //try to receive the result from 
-    for (int n = 1; n < numproc; ++n){
+    // try to receive the result from
+    for (int n = 1; n < numproc; ++n)
+    {
+      double time1 = MPI::Wtime();
       ULONG iresult = 0;
       MPI::COMM_WORLD.Recv(&iresult, 1, MPI::UNSIGNED_LONG, n, 0);
-      //sum up the result
+      // sum up the result
+      cout << "Recive myid[" << n << "] result is: " << iresult << endl;
       total_count += iresult;
       MPI::COMM_WORLD.Send(&total_count, 1, MPI::UNSIGNED_LONG, n, 0);
+      double telapse1 = 1000 * (MPI::Wtime() - time1);
+      time_cost += telapse1;
     }
-
-    std::cout << "The final result is " << (total_count/(numproc*numtrials))*4 << std::endl;
+    double pi_estimate =  4.0 * total_count / (numproc * numtrials);
+    std::cout << "The final result is " << pi_estimate << ", Total time cost:" << time_cost << ", total_count:" << total_count << std::endl;
   }
 
   else
   {
-
     // Slave waits to receive 'N' from master
     ULONG i_prev;
-    std::cout << "The id "<<myid<<" waiting"<<std::endl;
+    // std::cout << "The id "<<myid<<" waiting"<<std::endl;
     MPI::COMM_WORLD.Recv(&i_prev, 1, MPI::UNSIGNED_LONG, 0, 0);
     MPI::COMM_WORLD.Send(&i_prev, 1, MPI::UNSIGNED_LONG, 0, 0);
 
     ULONG sum1 = 0;
 
     sum1 = calculate(i_prev, numproc, myid);
-
+    // cout<<"Myid["<<myid<<"] calculate result is:"<< sum1<<endl;
     // Slave sends 'sum1' to master
     MPI::COMM_WORLD.Send(&sum1, 1, MPI::UNSIGNED_LONG, 0, 0);
     MPI::COMM_WORLD.Recv(&sum1, 1, MPI::UNSIGNED_LONG, 0, 0);
-    std::cout << "The id ["<<myid<<"] calculation finish"<<std::endl;
+    // std::cout << "The id ["<<myid<<"] calculation finish"<<std::endl;
   }
   MPI::Finalize();
 }
